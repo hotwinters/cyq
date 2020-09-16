@@ -1,0 +1,174 @@
+//a easy pollserver
+
+//poll用poll监控标准输入是因为当没有输入的时候，进程就一直处于阻塞状态（5stime out），当有数据输入时时间就立即就绪
+#include<stdio.h>
+#include<stdlib.h>
+#include<string.h>
+#include<assert.h>
+#include<sys/socket.h>
+#include<netinet/in.h>
+#include<arpa/inet.h>
+#include<poll.h>
+#include<unistd.h>
+#include <time.h>
+#include <cstddef>
+
+#define MAXFD 10
+int create_sockfd();
+
+//向fds数组中添加文件描述符fd，指定关注的事件
+void fds_add(struct pollfd fds[], int fd)
+{
+	int i = 0;
+	for (; i < MAXFD; ++i)
+	{
+		if (fds[i].fd == -1)
+		{
+			fds[i].fd = fd;
+			fds[i].events = POLLIN;
+			fds[i].revents = 0;
+			break;
+		}
+	}
+
+}
+//在fds数组中删除指定文件描述符fd及其相关事件信息
+void fds_del(struct pollfd fds[], int fd)
+{
+	int i = 0;
+	for (; i < MAXFD; ++i)
+	{
+		if (fds[i].fd == fd)
+		{
+			fds[i].fd = -1;
+			fds[i].events = 0;
+			fds[i].revents = 0;
+			break;
+		}
+	}
+}
+//初始化fds数组，其中文件描述符fd置为-1，其余都置为0
+void fds_init(struct pollfd fds[])
+{
+	int i = 0;
+	for (; i < MAXFD; ++i)
+	{
+		fds[i].fd = -1;
+		fds[i].events = 0;
+		fds[i].revents = 0;
+	}
+}
+int main()
+{
+
+	sleep(5);
+	int sockfd = create_sockfd();
+	assert(sockfd != -1);
+
+	//初始化pollfd类型的结构体数组fds
+	struct pollfd fds[MAXFD];
+
+	//初始化fds数组
+	fds_init(fds);
+
+	//将sockfd添加到fds数组中
+	fds_add(fds, sockfd);
+
+	while (1)
+	{
+		//使用poll系统调用轮询，测试其中是否有就绪者
+		int n = poll(fds, MAXFD, 5000);
+		if (n == -1)
+		{
+			perror("poll error");
+		}
+		else if (n == 0)	//返回0表示超时，没有就绪者
+		{
+			printf("time out\n");
+		}
+		else	//fds数组存在就绪的文件描述符
+		{
+			int i = 0;
+			for (; i < MAXFD; ++i)
+			{
+				if (fds[i].fd == -1)
+				{
+					continue;
+				}
+
+				//可获得是哪个文件描述符上就绪, fds[i]中的成员revents由系统内核修改
+				if (fds[i].revents & POLLIN)
+				{
+					//这时候分两种情况
+					//若fds[i].fd == sockfd说明监听队列中有连接待处理
+					//则使用accept接收连接
+					//否则，没有新连接产生，是已有客户端发来了数据
+					//我们直接使用recv接收客端数据，并打印收到的数据
+					if (fds[i].fd == sockfd)
+					{
+						struct sockaddr_in caddr;
+						socklen_t len = sizeof(caddr);
+						
+						//接收一个套接字已建立的连接，得到连接套接字c
+						int c = accept(sockfd, (struct sockaddr*) & caddr, &len);
+						if (c < 0)
+						{
+							continue;
+						}
+						printf("accept c=%d\n", c);
+						//将新的连接套接字c，添加到pollfd结构类型的数组fds
+						fds_add(fds, c);
+					}
+					else
+					{
+						char buff[128] = { 0 };
+
+						//使用recv来接收客端数据
+						int res = recv(fds[i].fd, buff, 127, 0);
+
+						//接收服务器端的数据是零，即n返回0，说明客户端已经关闭
+						if (res <= 0)
+						{
+							//关闭文件描述符fds[i].fd
+							close(fds[i].fd);
+							//从fds数组中删除此文件描述符 
+							fds_del(fds, fds[i].fd);
+							printf("one client over\n");
+						}
+						else
+						{
+							//n不为0，即接收到了数据，那么打印数据，并向客端回复一条信息
+							printf("recv(%d)=%s\n", fds[i].fd, buff);
+							send(fds[i].fd, "ok", 2, 0);
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+int create_sockfd()
+{
+	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (sockfd == -1)
+	{
+		return -1;
+	}
+
+	struct sockaddr_in saddr;
+	memset(&saddr, 0, sizeof(saddr));
+	saddr.sin_family = AF_INET;
+	saddr.sin_port = htons(6000);
+	saddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+	int res = bind(sockfd, (struct sockaddr*) & saddr, sizeof(saddr));
+	if (res == -1)
+	{
+		return -1;
+	}
+
+	listen(sockfd, 5);
+
+	return sockfd;
+}
