@@ -1,0 +1,159 @@
+/*
+epoll系列系统调用主要接口是epoll_wait函数，他在一段超时时间内等待一组文件描述符上的事件
+epoll_wait(int epfd,struct epoll_event*event ,int maxevents,int timeout);
+epoll_wait 如果监测到事件，就将所有就绪的事件从内核时间表中复制到他的第二个参数
+events指向的数组中，这个数组只输出就绪事件（区别于select poll）
+具有两种工作模式ET|| LT
+下为ET&&EPOLLONESHOT
+*/
+#include <sys/epoll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <assert.h>
+#include <iostream>
+#include <stdio.h>
+#include <sys/types.h>
+#include <string.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
+
+
+#define MAX_EBENTS_NUMBER 1024
+#define BUFFER_SIZE 1024
+
+
+struct fds
+{
+	int epollfd;
+	int sockfd;
+};
+//文件描述符设置为非阻塞
+int setnunblocking(int fd) {
+	int old_option = fcntl(fd,F_GETFL);
+	int new_option = old_option | O_NONBLOCK;
+	fcntl(fd, F_SETFL, new_option);
+	return old_option;
+}
+
+//fd上的EPOLLIN,EPOLLET注册到eopll内核事件表中，oneshot指定注册EPOLLONESHOT事件
+
+void addfd(int epollfd, int fd, bool oneshot) {
+	epoll_event event;
+	event.data.fd = fd;
+	event.events = EPOLLIN | EPOLLET;
+
+	if (oneshot) {
+		event.events |= EPOLLONESHOT;
+	}
+
+	epoll_ctl(epollfd, EPOLL_CTL_ADD, fd, &event);
+	setnunblocking(fd);
+}
+
+//重置fd上的事件，但操作系统还是会触发一次EPOLLIN事件
+void reset_oneshot(int epollfd, int fd) {
+	epoll_event event;
+	event.data.fd = fd;
+	event.events = EPOLLET | EPOLLIN | EPOLLONESHOT;
+	epoll_ctl(epollfd, EPOLL_CTL_MOD, fd, &event);
+}
+
+//线程
+void* worker(void* arg) {
+	int sockfd = ((fds*)arg)->sockfd;
+	int epollfd = ((fds*)arg)->epollfd;
+	std::cout << "start new thread" << sockfd << std::endl;
+	char buf[BUFFER_SIZE];
+	memset(buf, 0, sizeof(buf));
+
+	//循环读取sockfd上的数据，直到EAGAIN错误
+	while (1)
+	{
+		int ret = recv(sockfd, buf, sizeof(buf) - 1, 0);
+		if (ret == 0) {
+			std::cout << "connect stop" << std::endl;
+			close(sockfd);
+			sleep(3);
+			break;
+		}
+		else if (ret < 0) {
+			if (errno == EAGAIN) {
+				reset_oneshot(epollfd, sockfd);
+				std::cout << "read later " << std::endl;
+				break;
+			}
+		}
+		else {
+			std::cout << "messages from client "<<sockfd<<"is: " << buf << std::endl;
+			
+		}
+	}
+}
+
+int main()
+{
+	std::cout << "server is running" << std::endl;
+	char ip[20] = { "127.0.0.1" };
+	int port = atoi("6666");
+	int ret = 0;
+
+	struct sockaddr_in address;
+	address.sin_family = AF_INET;
+	address.sin_port = htons(port);
+	inet_pton(AF_INET, ip, &address.sin_addr);
+
+	int listenfd = socket(PF_INET, SOCK_STREAM, 0);
+	assert(listenfd >= 0);
+
+	ret = bind(listenfd, (struct sockaddr*) & address, sizeof(address));
+	assert(ret != -1);
+
+	ret = listen(listenfd, 5);
+	assert(ret != -1);
+
+	epoll_event events[MAX_EBENTS_NUMBER];
+	int epollfd = epoll_create(5);
+	assert(epollfd != -1);
+	addfd(epollfd, listenfd, false);
+	//循环
+	while (1)
+	{
+		//阻塞
+		int ret = epoll_wait(epollfd, events, MAX_EBENTS_NUMBER, -1);
+		if (ret <= 0) {
+			std::cout << "epoll failure" << std::endl;
+		}
+
+		for (int i = 0; i < ret; ++i) {
+			int sockfd = events[i].data.fd;
+			
+			if (sockfd == listenfd) {
+				struct sockaddr_in clientaddress;
+				socklen_t len = sizeof(clientaddress);
+				int connfd = accept(sockfd, (struct sockaddr*) & clientaddress, &len);
+				//对每个非监听文件描述符注册EPOLLONOSHOT事件
+				addfd(epollfd, connfd, true);
+				std::cout << "connect finished the fd is " << connfd << std::endl;
+			}
+			else if(events[i].events & EPOLLIN) {
+				pthread_t thread;
+				fds fds_for_new_worker;
+				fds_for_new_worker.epollfd = epollfd;
+				fds_for_new_worker.sockfd = sockfd;
+				//启动线程为sockfd服务
+				pthread_create(&thread, NULL, worker, (void*)&fds_for_new_worker);
+			}
+
+			else {
+				std::cout << "others" << std::endl;
+			}
+		}
+	}
+
+	close(listenfd);
+	return 0;
+}
