@@ -1,0 +1,207 @@
+//定时器——最小堆
+
+
+
+
+#ifndef MIN_HEAP
+
+#include <iostream>
+#include <netinet/in.h>
+#include <time.h>
+
+#define BUFFER_SIZE 64
+using namespace std;
+
+
+//定时器类
+class heap_timer;
+struct client_data
+{
+	sockaddr_in address;
+	int sockfd;
+	char buf[BUFFER_SIZE];
+	heap_timer* timer;
+};
+class heap_timer
+{
+public:
+	heap_timer(int delay) {
+		expire = time(NULL) + delay;
+	}
+	time_t expire; //定时器生效的时间
+	void (*cb_func)(client_data*);//回调函数
+	client_data* user_data; //用户数据
+};
+
+//时间堆类
+class time_heap
+{
+private:
+	heap_timer** array; //堆数组
+	int capacity;//堆数组的容量
+	int cur_size; //堆数组当前包含元素的个数
+public:
+	//初始化大小为cap的空堆
+	time_heap(int cap)throw(exception) :capacity(cap), cur_size(0) {
+		array = new heap_timer * [capacity];//创建堆数组
+		if (!array) {
+			throw exception();
+		}
+		for (int i = 0; i < capacity; ++i) {
+			array[i] = NULL;
+		}
+	}
+	//初始化堆
+	time_heap(heap_timer** init_array, int size, int capatity)throw(exception) :
+		cur_size(size), capacity(capacity) {
+		if (capacity < size) {
+			throw exception();
+		}
+		array = new heap_timer * [capacity];
+		if (!array)
+		{
+			throw exception();
+		}
+		for (int i = 0; i < capacity; ++i) {
+			array[i] = NULL;
+		}
+		//初始化
+		if (size != 0) {
+			for (int i = 0; i < size; ++i) {
+				array[i] = init_array[i];
+			}
+			for (int i = (cur_size) / 2; i = 0; --i) {
+				percolate_down(i);//下滤操作，确保数组中第hole个节点作为根的字数拥有最小堆性质
+			}
+		}
+	}
+	~time_heap() {
+		for (int i = 0; i < cur_size; ++i) {
+			delete array[i];
+		}
+		delete[]array;
+	}
+	//添加目标定时器timer
+	void add_timer(heap_timer* timer)throw(exception) {
+		if (!timer) {
+			return;
+		}
+		if (cur_size >= capacity) {
+			resize();
+		}
+		//新插入了一个元素，堆大小加一，hole是新建空穴的位置
+		int hole = cur_size++;
+		int parent = 0;
+		//对从空穴到根节点的路径上的所有节点执行上滤操作
+		for (; hole > 0; hole = parent) {
+			parent = (hole - 1) / 2;
+			if (array[parent]->expire <= timer->expire) {
+				break;
+			}
+			array[hole] = array[parent];
+		}
+		array[hole] = timer;
+	}
+	//删除目标定时器timer
+	void del_timer(heap_timer* timer)
+	{
+		if (!timer) {
+			return;
+		}
+		//延迟销毁->容易使得堆数组膨胀
+		timer->cb_func = NULL;
+	}
+	//获得堆顶部的定时器
+	heap_timer* top()const
+	{
+		if (empty()) {
+			return NULL;
+		}
+		return array[0];
+	}
+	//删除堆顶部的定时器
+	void pop_timer()
+	{
+		if (empty()) {
+			return;
+		}
+		if (array[0]) {
+			delete array[0];
+			//将原来的堆顶元素替换为堆数组中最后一个元素
+			array[0] = array[--cur_size];
+			percolate_down(0);
+		}
+	}
+
+	//心搏函数
+	void tick()
+	{
+		heap_timer* tmp = array[0];
+		//循环处理到期的定时器
+		time_t cur = time(NULL);
+		while(!tmp) {
+			break;
+		}
+		//如果堆顶计时器还没到期，就退出循环
+		if (tmp->expire > cur) {
+			return;
+		}
+		//执行任务
+		if (array[0]->cb_func) {
+			array[0]->cb_func(array[0]->user_data);
+		}
+		//删除堆顶元素，同时生成新的堆顶定时器
+		pop_timer();
+		tmp = array[0];
+	}
+
+
+	bool empty()const {
+		return cur_size == 0;
+	}
+
+
+private:
+	//最小堆的下滤操作，确保数组第hole节点为根的子树拥有最小堆的性质
+	void percolate_down(int hole)
+	{
+		heap_timer* temp = array[hole];
+		int child;
+		for (; ((hole * 2 + 1) <= (cur_size - 1)); hole = child) {
+			child = hole * 2 + 1;
+			if ((child < (cur_size - 1)) && (array[child + 1]->expire <
+				array[child]->expire))
+			{
+				++child;
+			}
+			if (array[child]->expire < temp->expire) {
+				array[hole] = array[child];
+			}
+			else
+			{
+				break;
+			}
+		}
+		array[hole] = temp;
+	}
+
+	//扩大数组容量
+	void resize()throw(exception) {
+		heap_timer** temp = new heap_timer * [2 * capacity];
+		for (int i = 0; i < 2 * capacity; ++i) {
+			array[i] = NULL;
+		}
+		if (!temp) {
+			throw exception();
+		}
+		capacity = 2*capacity;
+		for (int i = 0; i < cur_size; ++i) {
+			temp[i] = array[i];
+		}
+		delete[]array;
+		array = temp;
+	}
+};
+
+
+#endif  !MIN_HEAP
