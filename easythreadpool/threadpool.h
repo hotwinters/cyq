@@ -5,6 +5,7 @@
 #include <assert.h>
 #include <pthread.h>
 #include <deque>
+#include <iostream>
 
 using namespace std;
 
