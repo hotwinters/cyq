@@ -1,0 +1,22 @@
+#include "threadpool.cpp"
+#include <unistd.h>
+
+void work(void*i) {
+	for (int j = 0; j < 10; ++j) {
+		cout << "server is doing job now  " << j << endl;
+	}
+}
+
+
+
+int main()
+{
+
+	threadpool thpool(5);
+	for (int i = 0; i < 10; ++i) {
+		sleep(1);
+		thpool.addjob(work, &i);
+	}
+	sleep(20);
+	return 0;
+}
